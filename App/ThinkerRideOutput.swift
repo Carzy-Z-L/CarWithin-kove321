@@ -167,9 +167,9 @@ final class ThinkerRideBle: NSObject, CBCentralManagerDelegate, CBPeripheralDele
         buffer.append(value)
         // 仪表推送是换行缩进的明文 JSON，按大括号配对切分。
         while let start = buffer.firstIndex(of: UInt8(ascii: "{")), let end = buffer.firstIndex(of: UInt8(ascii: "}")) {
-            guard end > start else { buffer.removeFirst(end + 1); continue }
+            guard end > start else { buffer.removeFirst(end - buffer.startIndex + 1); continue }
             let chunk = buffer.subdata(in: start...end)
-            buffer.removeFirst(end + 1)
+            buffer.removeFirst(end - buffer.startIndex + 1)
             guard let object = try? JSONSerialization.jsonObject(with: chunk) as? [String: Any] else { continue }
             handle(object)
         }
@@ -197,7 +197,7 @@ final class ThinkerRideBle: NSObject, CBCentralManagerDelegate, CBPeripheralDele
             peripheral.writeValue(data, for: writeCharacteristic, type: .withoutResponse)
         } else {
             var offset = 0
-            let chunkLimit = max(20, minimum(maximum, 512))
+            let chunkLimit = max(20, min(maximum, 512))
             while offset < data.count {
                 let chunk = data.subdata(in: offset..<min(offset + chunkLimit, data.count))
                 peripheral.writeValue(chunk, for: writeCharacteristic, type: .withResponse)
