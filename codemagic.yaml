@@ -1,0 +1,32 @@
+# Codemagic 云端 Mac 编译未签名 IPA（免费套餐 500 分钟/月）
+# 使用：codemagic.io 登录后选择本仓库 → workflow "kove-ipa" → Start build
+workflows:
+  kove-ipa:
+    name: Build unsigned IPA (KOVE 321RS)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Generate Xcode project
+        script: python3 Tools/generate_project.py
+      - name: Build unsigned .app (arm64, iphoneos)
+        script: |
+          xcodebuild -project TDSCarKit.xcodeproj -scheme TDSCarKit \
+            -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath build/source
+      - name: Package unsigned IPA
+        script: |
+          mkdir -p Payload
+          cp -R "build/source/Build/Products/Release-iphoneos/TDSCarKit.app" Payload/
+          zip -qry TDSCarKit-kove-unsigned.ipa Payload
+          ls -la TDSCarKit-kove-unsigned.ipa
+    artifacts:
+      - TDSCarKit-kove-unsigned.ipa
+    publishing:
+      email:
+        recipients:
+          - build@codemagic.local
+        notify:
+          success: true
+          failure: true
