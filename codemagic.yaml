@@ -23,10 +23,3 @@ workflows:
           ls -la TDSCarKit-kove-unsigned.ipa
     artifacts:
       - TDSCarKit-kove-unsigned.ipa
-    publishing:
-      email:
-        recipients:
-          - build@codemagic.local
-        notify:
-          success: true
-          failure: true
