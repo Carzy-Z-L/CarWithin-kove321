@@ -1,0 +1,8 @@
+name: CI test
+on: [push, workflow_dispatch]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: hello
+        run: echo "ubuntu runner works"
