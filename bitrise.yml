@@ -1,0 +1,42 @@
+# Bitrise 云端 Mac 编译未签名 IPA（免费 Hobby 套餐）
+# 添加应用时选择"使用仓库中的 bitrise.yml"即可，无需网页配置
+format_version: "13"
+default-step-lib-source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+
+workflows:
+  kove-ipa:
+    steps:
+      - activate-ssh-key@4:
+          run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
+      - git-clone@8: {}
+      - script@1:
+          title: Generate Xcode project
+          inputs:
+            - content: |-
+                #!/bin/bash
+                set -x
+                python3 Tools/generate_project.py
+      - script@1:
+          title: Build unsigned .app (arm64, iphoneos)
+          inputs:
+            - content: |-
+                #!/bin/bash
+                set -x
+                xcodebuild -project TDSCarKit.xcodeproj -scheme TDSCarKit \
+                  -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO \
+                  -derivedDataPath build/source
+      - script@1:
+          title: Package unsigned IPA
+          inputs:
+            - content: |-
+                #!/bin/bash
+                set -x
+                mkdir -p Payload
+                cp -R "build/source/Build/Products/Release-iphoneos/TDSCarKit.app" Payload/
+                zip -qry TDSCarKit-kove-unsigned.ipa Payload
+                ls -la TDSCarKit-kove-unsigned.ipa
+      - deploy-to-bitrise-io@2:
+          title: Upload IPA as artifact
+          inputs:
+            - deploy_path: TDSCarKit-kove-unsigned.ipa
