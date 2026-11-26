@@ -185,6 +185,13 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         cfmotoStatus.text = message
         cfmotoCardStatus.text = message
     }
+    private let koveCard = UIStackView()
+    private let koveCardStatus = UILabel()
+    private let koveStatus = StatusLabel()
+    private func updateKoveStatus(_ message: String) {
+        koveStatus.text = message
+        koveCardStatus.text = message
+    }
     private let ninebotCard = UIStackView()
     private var ninebotCardInstructions: UILabel?
     private static let ninebotFiveInstructions = CWL("连接仪表 Wi-Fi，先启动本机 CarPlay。没有画面时，再到九号出行开启投屏导航。")
@@ -237,9 +244,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     private let headUnitOutput = ChoiceMenu(items: HeadUnitOutput.menuOrder.map(\.title))
     private enum HeadUnitOutput: Int {
         // Persisted in headUnitOutputV2. Append new modes after existing values.
-        case browser, carLife, airPlay, tailing, ninebot, zeeho, ninebotSeven, ninebot43, zeehoSEPlus, zeehoAE2, cfmoto5, cfmoto62
+        case browser, carLife, airPlay, tailing, ninebot, zeeho, ninebotSeven, ninebot43, zeehoSEPlus, zeehoAE2, cfmoto5, cfmoto62, kove321
         // Display order is independent of the persisted raw values above.
-        static let menuOrder: [Self] = [.browser, .carLife, .airPlay, .ninebot43, .ninebot, .ninebotSeven, .tailing, .zeeho, .zeehoSEPlus, .zeehoAE2, .cfmoto5, .cfmoto62]
+        static let menuOrder: [Self] = [.browser, .carLife, .airPlay, .ninebot43, .ninebot, .ninebotSeven, .tailing, .zeeho, .zeehoSEPlus, .zeehoAE2, .cfmoto5, .cfmoto62, .kove321]
         var menuIndex: Int { Self.menuOrder.firstIndex(of: self)! }
         var title: String {
             switch self {
@@ -255,6 +262,7 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             case .zeehoAE2: return CWL("极核 AE2 Pro 5 寸")
             case .cfmoto5: return CWL("春风 5 寸")
             case .cfmoto62: return CWL("春风 6.2 寸")
+            case .kove321: return CWL("凯越 321RS（思骑）")
             }
         }
         var ninebotMode: NinebotOutput.Mode? {
@@ -274,7 +282,9 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
             }
         }
         var cfmoto: Bool { self == .cfmoto5 || self == .cfmoto62 }
-        var usesInstrumentWiFi: Bool { cfmoto || self == .tailing || zeehoProfile != nil || ninebotMode != nil }
+        var usesInstrumentWiFi: Bool { cfmoto || self == .kove321 || self == .tailing || zeehoProfile != nil || ninebotMode != nil }
+        /// 凯越/思骑输出规格（跟随所选模式，默认 800×800）。
+        var thinkerRideProfile: ThinkerRideProfile? { self == .kove321 ? .koveSquare : nil }
     }
     private var airPlayStreamID: UUID?
     private var airPlayStreamURL: URL?
@@ -549,6 +559,14 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         cfmotoSettings.addAction(UIAction { [weak self] _ in self?.revealSettings(output: true) }, for: .touchUpInside)
         cfmotoCard.addArrangedSubview(cfmotoSettings)
         stack.addArrangedSubview(cfmotoCard)
+        configureConnectionCard(koveCard, title: "凯越 321RS 连接", symbol: "motorcycle", color: .systemIndigo,
+            instructions: "让 iPhone 加入凯越仪表 Wi-Fi（CQKY_…），保持仪表停在手机互联页面后启动 CarPlay。CarWithin 会自动通过蓝牙点火（应答仪表心跳），仪表随后主动连入 17818/15456 通道出画。需要开启蓝牙与本地网络权限。", status: koveCardStatus)
+        let koveSettings = UIButton(type: .system)
+        koveSettings.configuration = .tinted()
+        koveSettings.configuration?.title = CWL("连接设置")
+        koveSettings.addAction(UIAction { [weak self] _ in self?.revealSettings(output: true) }, for: .touchUpInside)
+        koveCard.addArrangedSubview(koveSettings)
+        stack.addArrangedSubview(koveCard)
         ninebotCardInstructions = configureConnectionCard(ninebotCard, title: CWL("九号仪表连接"), symbol: "scooter", color: .systemBlue,
             instructions: Self.ninebotFiveInstructions, status: ninebotCardStatus)
         let ninebotSettings = UIButton(type: .system)
@@ -887,6 +905,11 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
     /// Size, frame rate and codec for the next session from the settings, the known head-unit
     /// screen and any lighter level chosen by CWL("自动重启").
     private func planDisplay(for screen: CarScreen?) -> DisplayPlan {
+        if let profile = outputMode.thinkerRideProfile {
+            let icon = ReceiverConfiguration.iconSizes[max(0, iconSizeControl.selectedSegmentIndex)].widthMM
+            return DisplayPlan(width: profile.encodeWidth, height: profile.encodeHeight,
+                               fps: profile.fps, codec: .h264, iconWidthMM: icon)
+        }
         if let cfmoto = cfmotoProfile {
             let icon = ReceiverConfiguration.iconSizes[max(0, iconSizeControl.selectedSegmentIndex)].widthMM
             // 按偶数对齐：H.264 4:2:0 不接受 515 这样的奇数高度。
@@ -1153,6 +1176,8 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         if !running {
             updateCfmotoStatus("等待启动 CarPlay · 仪表 IP：\(cfmotoAddressField.text?.isEmpty == false ? cfmotoAddressField.text! : "自动取网关")")
         }
+        koveCard.isHidden = !showsLocalOutput || outputMode != .kove321
+        if !running { updateKoveStatus("等待启动 CarPlay · 蓝牙点火自动连接") }
         tailingCard.isHidden = !showsLocalOutput || outputMode != .tailing
         if !running { updateTailingStatus(CWL("等待启动 CarPlay · 仪表 IP：{1}", [String(describing: tailingAddressField.text ?? "192.168.1.1")])) }
         carLifeCard.isHidden = !showsLocalOutput || outputMode != .carLife
@@ -1214,6 +1239,10 @@ final class ReceiverViewController: UIViewController, CLLocationManagerDelegate 
         if let profile = cfmotoProfile {
             config.cfmotoAddress = (cfmotoAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             config.cfmotoProfile = profile
+        }
+        if let profile = outputMode.thinkerRideProfile {
+            config.thinkerRideEnabled = true
+            config.thinkerRideProfile = profile
         }
         if let mode = outputMode.ninebotMode {
             config.ninebotAddress = (activeNinebotAddressField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2823,6 +2852,15 @@ extension ReceiverViewController {
                     .field(CWL("仪表 IP 地址"), cfmotoAddressField, placeholder: "留空尝试 .1"),
                     .note(cfmotoStatus)
                 ])]
+            case .kove321:
+                return [SettingsSection(headUnitOutput.selectedTitle, [
+                    .note(koveStatus)
+                ]), SettingsSection(CWL("使用说明"), [
+                    .guide(CWL("启动顺序"), icon: ("play.circle", .systemBlue),
+                           "① 仪表通电停在「手机互联」二维码页；② iPhone 连上仪表 Wi-Fi（CQKY_…）；③ 退出/清掉「思骑出行」后台；④ 开启蓝牙与本地网络权限；⑤ 启动 CarPlay。"),
+                    .guide(CWL("没有画面时"), icon: ("info.circle", .systemBlue),
+                           "在日志里确认：蓝牙点火是否应答心跳（tag）、仪表是否连入 17818/15456。若仪表连入后黑屏，可尝试在「凯越 800×640 / 480×800」等其他规格下重试（需修改源码常量后重编译）。")
+                ])]
             case .ninebot, .ninebotSeven, .ninebot43:
                 let fiveInch = outputMode == .ninebot
                 let startup = fiveInch
@@ -2863,6 +2901,7 @@ extension ReceiverViewController {
     private func prepareExternalOutput(configuration: ReceiverConfiguration) {
         if configuration.zeehoAddress != nil { updateZeehoStatus(CWL("正在连接极核仪表…")) }
         if configuration.cfmotoProfile != nil { updateCfmotoStatus("正在推流到春风仪表…") }
+        if configuration.thinkerRideEnabled { updateKoveStatus("正在蓝牙点火，等待仪表接入…") }
         if configuration.ninebotAddress != nil { updateNinebotStatus(CWL("正在连接九号仪表…")) }
         if configuration.tailingAddress != nil { updateTailingStatus(CWL("正在连接台铃仪表…")) }
         if configuration.carLifeEnabled {

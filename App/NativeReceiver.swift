@@ -64,6 +64,8 @@ final class NativeReceiver {
     private let cfmoto5 = CfmotoOutput(name: "cfmoto5")
     private let cfmoto62 = CfmotoOutput(name: "cfmoto62")
     var onCfmotoState: ((String) -> Void)?
+    private let kove321 = ThinkerRideOutput(name: "kove321")
+    var onKoveState: ((String) -> Void)?
     private let tailing = TailingOutput()
     var onTailingState: ((String) -> Void)?
     private lazy var carLink = CarLinkRelay(queue: queue)
@@ -146,6 +148,12 @@ final class NativeReceiver {
                              onState: { [weak self] in self?.onCfmotoState?($0) },
                              onLog: { [weak self] in self?.log($0) },
                              requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: "春风解码恢复") })
+            }
+            if configuration.thinkerRideEnabled {
+                self.kove321.start(localAddress: configuration.address, profile: configuration.thinkerRideProfile,
+                    onState: { [weak self] in self?.onKoveState?($0) },
+                    onLog: { [weak self] in self?.log($0) },
+                    requestKeyframe: { [weak self] in self?.requestKeyFrame(reason: "凯越解码恢复") })
             }
             if let target = configuration.ninebotAddress {
                 self.ninebot.start(localAddress: configuration.address, targetAddress: target, mode: configuration.ninebotMode,
@@ -370,6 +378,7 @@ final class NativeReceiver {
         ninebot.stop()
         cfmoto5.stop()
         cfmoto62.stop()
+        kove321.stop()
         tailing.stop()
         carLink.stop()
         #if DEBUG
@@ -473,6 +482,7 @@ final class NativeReceiver {
                         let output = cfmoto == .sixInch ? self.cfmoto62 : self.cfmoto5
                         output.append(data, codec: codec, keyframe: keyframe)
                     }
+                    if configuration.thinkerRideEnabled { self.kove321.append(data, codec: codec, keyframe: keyframe) }
                     if configuration.tailingAddress != nil { self.tailing.append(data, codec: codec) }
                     if configuration.carLifeEnabled { self.carLife.append(data, codec: codec) }
                     if configuration.carLinkRelayAddress != nil { self.carLink.append(data, codec: codec) }

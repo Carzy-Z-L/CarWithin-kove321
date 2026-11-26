@@ -41,6 +41,10 @@ struct ReceiverConfiguration {
     var tailingPhoneInfo: TailingPhoneInfo?
     var carLinkRelayAddress: String?
     static let carLinkRelayPort: UInt16 = 24890
+    /// 凯越 321RS（思骑 ThinkerRide）：BLE 点火（FFE1/FFE2 心跳应答），
+    /// 手机监听 17818（控制）/15456（视频），仪表主动回连，无需仪表 IP。
+    var thinkerRideEnabled = false
+    var thinkerRideProfile: ThinkerRideProfile = .koveSquare
     /// Physical width declared to the iPhone; larger values fit more (smaller) icons per page.
     var widthPhysicalMM = CarPlayInfo.defaultWidthPhysicalMM
     var browserPerformance: BrowserPerformance = .auto

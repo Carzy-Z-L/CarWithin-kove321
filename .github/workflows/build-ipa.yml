@@ -1,0 +1,47 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Generate Xcode project
+        run: python3 Tools/generate_project.py
+
+      - name: Build unsigned arm64 Release
+        run: |
+          xcodebuild -project TDSCarKit.xcodeproj -scheme TDSCarKit \
+            -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath build/source
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R "build/source/Build/Products/Release-iphoneos/TDSCarKit.app" Payload/
+          zip -qry TDSCarKit-kove-unsigned.ipa Payload
+          ls -la TDSCarKit-kove-unsigned.ipa
+          unzip -l TDSCarKit-kove-unsigned.ipa | head -20
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TDSCarKit-kove-unsigned-ipa
+          path: TDSCarKit-kove-unsigned.ipa
+          retention-days: 90
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TDSCarKit-kove-unsigned.ipa
