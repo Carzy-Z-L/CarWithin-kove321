@@ -46,16 +46,19 @@ final class ThinkerRideBle: NSObject, CBCentralManagerDelegate, CBPeripheralDele
     private var connectedOnce = false
     private let onLog: (String) -> Void
     private var onConnected: (() -> Void)?
+    /// 仪表通过 BLE 发来 ROAD_NAVI/request_start（请求手机投屏）时回调。
+    private var onProjectionRequest: (() -> Void)?
 
     init(onLog: @escaping (String) -> Void) {
         self.onLog = onLog
         super.init()
     }
 
-    func start(onConnected: @escaping () -> Void) {
+    func start(onConnected: @escaping () -> Void, onProjectionRequest: @escaping () -> Void) {
         stop()
         lock.withLock { active = true; connectedOnce = false }
         self.onConnected = onConnected
+        self.onProjectionRequest = onProjectionRequest
         central = CBCentralManager(delegate: self, queue: DispatchQueue(label: "CarWithin.kove.ble", qos: .userInitiated))
     }
 
@@ -177,6 +180,16 @@ final class ThinkerRideBle: NSObject, CBCentralManagerDelegate, CBPeripheralDele
     }
 
     private func handle(_ object: [String: Any]) {
+        // 车→手机消息有两类：心跳 {msg_id:10,item:4} 和 控制 {msg_id:27,func,act}。
+        // 官方协议：投屏由仪表主动发 {"func":"ROAD_NAVI","act":"request_start"} 请求，
+        // 手机收到后回 K0(0) 确认，仪表才连 15456。绝不能由手机主动发 request_start。
+        let funcName = object["func"] as? String
+        let act = object["act"] as? String
+        if funcName == "ROAD_NAVI" && act == "request_start" {
+            onLog("[凯越] 收到仪表投屏请求（ROAD_NAVI/request_start），回复确认…")
+            onProjectionRequest?()
+            return
+        }
         guard object["msg_id"] as? Int == 10, object["item"] as? Int == 4 else { return }
         guard let tag = object["tag"] as? Int else { return }
         // 源码 BleConnectWrapper.L0() case 4 → c11.f0(tag)：只应答新的 tag。
@@ -325,10 +338,12 @@ final class ThinkerRideOutput {
 
         func start() {
             report("正在蓝牙点火（连接仪表并应答心跳）…")
-            ble.start { [weak self] in
+            ble.start(onConnected: { [weak self] in
                 guard let self else { return }
-                self.report("点火通道就绪，等待仪表接入 17818/15456…")
-            }
+                self.report("点火通道就绪，等待仪表发起投屏请求…")
+            }, onProjectionRequest: { [weak self] in
+                self?.confirmProjection()
+            })
             openListeners()
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 sendLoop()
@@ -435,21 +450,19 @@ final class ThinkerRideOutput {
                     onLog("[凯越] 收到仪表 MAC：\(mac)")
                 }
             }
-            // 握手完成 → 触发导航投屏，仪表才会回连 15456 视频通道。
-            if deviceVersion != nil, deviceMac != nil, !projectionRequested {
-                projectionRequested = true
-                requestProjection()
-            }
         }
 
-        /// 复刻 c11.K0(0)（官方 wm0 里 sr.R0(c11.K0(0))）：
+        /// 复刻 c11.K0(0)（官方 wm0 的 onStart 回调里 sr.R0(c11.K0(0))）：
         /// {"msg_id":27,"func":"ROAD_NAVI","act":"request_start","result":0}
-        /// 走 BLE 发给仪表，仪表收到后才回连 15456 视频通道。
-        private func requestProjection() {
+        /// 这是**手机对仪表投屏请求的确认**，走 BLE 发回仪表；仪表收到后才会连 15456。
+        /// 注意方向：request_start 由仪表发起，手机只在收到后回 result:0 确认。
+        private func confirmProjection() {
+            guard active else { return }
+            projectionRequested = true
             let json = "{\"msg_id\":27,\"func\":\"ROAD_NAVI\",\"act\":\"request_start\",\"result\":0}"
             ble.send(json: json)
-            onLog("[凯越] 已发送导航投屏请求（ROAD_NAVI/request_start），等待仪表回连 15456…")
-            report("已请求投屏，等待仪表视频通道…")
+            onLog("[凯越] 已确认仪表投屏请求（K0/result:0），等待仪表回连 15456…")
+            report("已确认投屏，等待仪表视频通道…")
         }
 
         private func startHeartbeat() {
@@ -459,31 +472,18 @@ final class ThinkerRideOutput {
             deviceMac = nil
             projectionRequested = false
             let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-            timer.schedule(deadline: .now() + 0.2, repeating: 2)
+            timer.schedule(deadline: .now() + 0.2, repeating: 5)
             timer.setEventHandler { [weak self] in
                 guard let self, self.active, let connection = self.controlConnection else { return }
-                // p30.q()：先请求版本(01 01)，再请求 MAC(01 11)，都拿到后发正常心跳(02 01)。
-                let frame: Data
-                if self.deviceVersion == nil {
-                    frame = Data([0x01, 0x01, 0, 0, 0, 0])
-                } else if self.deviceMac == nil {
-                    frame = Data([0x01, 0x11, 0, 0, 0, 0])
-                } else {
-                    frame = Data([0x02, 0x01, 0, 0, 0, 0])
-                }
+                // p30.q()：version/mac 是 App 内部同步的，正常只发常规心跳 t10.v() = q83(02 01)。
+                // 不再发 01 01/01 11 版本请求——那会打断仪表协议状态，导致反复断连。
+                let frame = Data([0x02, 0x01, 0, 0, 0, 0])
                 connection.send(content: frame, completion: .contentProcessed { _ in })
             }
             timer.resume()
             heartbeatTimer = timer
-            // 兜底：部分仪表不回 version/mac JSON，6 秒后强制请求一次投屏，避免一直干等。
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 6) { [weak self] in
-                guard let self, self.active else { return }
-                if !self.projectionRequested {
-                    self.projectionRequested = true
-                    self.onLog("[凯越] 未收到握手应答，兜底发送导航投屏请求")
-                    self.requestProjection()
-                }
-            }
+            // 投屏完全由仪表通过 BLE 发起：收到 request_start 才回 K0(0) 确认。
+            // 不再主动发 request_start（那是仪表该发的命令，主动发会让仪表协议状态错乱）。
         }
 
         private func stopHeartbeat() {
