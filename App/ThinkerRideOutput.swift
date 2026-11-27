@@ -304,6 +304,10 @@ final class ThinkerRideOutput {
         private var videoReady = false
         private var heartbeatTimer: DispatchSourceTimer?
         private var heartbeatToggle = false
+        // 思骑 17818 握手：先请求版本号/MAC，拿到后仪表才放行投屏。
+        private var deviceVersion: String?
+        private var deviceMac: String?
+        private var projectionRequested = false
 
         init(queue: DispatchQueue, profile: ThinkerRideProfile, onState: @escaping (String) -> Void,
              onLog: @escaping (String) -> Void, requestKeyframe: @escaping () -> Void) {
@@ -398,11 +402,14 @@ final class ThinkerRideOutput {
         private func drainControl() {
             while controlBuffer.count >= 6 {
                 let bytes = [UInt8](controlBuffer.prefix(6))
-                let length = Int(bytes[2]) << 24 | Int(bytes[3]) << 16 | Int(bytes[4]) << 8 | Int(bytes[5])
+                let type = bytes[0], sub = bytes[1]
+                var length = Int(bytes[2]) << 24 | Int(bytes[3]) << 16 | Int(bytes[4]) << 8 | Int(bytes[5])
+                // 官方 z10.f()：EE FD 的 JSON 帧长度字段不含尾部 0xFF，读侧要 +1 才能连 FF 一起取走，
+                // 否则残留的 FF 会让后续帧头错位，导致握手应答永远解析不出来。
+                if type == 0xEE, sub == 0xFD { length += 1 }
                 guard controlBuffer.count >= 6 + length else { return }
                 let payload = controlBuffer.subdata(in: 6..<(6 + length))
                 controlBuffer.removeFirst(6 + length)
-                let type = bytes[0], sub = bytes[1]
                 if type == 0xEE, sub == 0xFD {
                     let body = payload.prefix(max(0, payload.count - 1))
                     if let json = String(data: body, encoding: .utf8) {
@@ -416,22 +423,67 @@ final class ThinkerRideOutput {
         }
 
         private func respondIfNeeded(_ json: String) {
-            // 激活状态查询等暂不实现；仪表多数查询可忽略。
+            guard let data = json.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            // CommonProcessMsg：act=5 → version，act=2 → mac，act=1 → tuc（激活状态）。
+            if let act = object["act"] as? Int {
+                if act == 5, let version = object["version"] as? String {
+                    deviceVersion = version
+                    onLog("[凯越] 收到仪表版本号：\(version)")
+                } else if act == 2, let mac = object["mac"] as? String {
+                    deviceMac = mac
+                    onLog("[凯越] 收到仪表 MAC：\(mac)")
+                }
+            }
+            // 握手完成 → 触发导航投屏，仪表才会回连 15456 视频通道。
+            if deviceVersion != nil, deviceMac != nil, !projectionRequested {
+                projectionRequested = true
+                requestProjection()
+            }
+        }
+
+        /// 复刻 c11.K0(0)（官方 wm0 里 sr.R0(c11.K0(0))）：
+        /// {"msg_id":27,"func":"ROAD_NAVI","act":"request_start","result":0}
+        /// 走 BLE 发给仪表，仪表收到后才回连 15456 视频通道。
+        private func requestProjection() {
+            let json = "{\"msg_id\":27,\"func\":\"ROAD_NAVI\",\"act\":\"request_start\",\"result\":0}"
+            ble.send(json: json)
+            onLog("[凯越] 已发送导航投屏请求（ROAD_NAVI/request_start），等待仪表回连 15456…")
+            report("已请求投屏，等待仪表视频通道…")
         }
 
         private func startHeartbeat() {
             stopHeartbeat()
+            heartbeatToggle = false
+            deviceVersion = nil
+            deviceMac = nil
+            projectionRequested = false
             let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-            timer.schedule(deadline: .now() + 1, repeating: 10)
+            timer.schedule(deadline: .now() + 0.2, repeating: 2)
             timer.setEventHandler { [weak self] in
                 guard let self, self.active, let connection = self.controlConnection else { return }
-                // p30.q() 的 10 秒定时：请求版本号与周期心跳交替（t10.i / t10.l）。
-                let frame: Data = self.heartbeatToggle ? Data([0x01, 0x11, 0, 0, 0, 0]) : Data([0x01, 0x01, 0, 0, 0, 0])
-                self.heartbeatToggle.toggle()
+                // p30.q()：先请求版本(01 01)，再请求 MAC(01 11)，都拿到后发正常心跳(02 01)。
+                let frame: Data
+                if self.deviceVersion == nil {
+                    frame = Data([0x01, 0x01, 0, 0, 0, 0])
+                } else if self.deviceMac == nil {
+                    frame = Data([0x01, 0x11, 0, 0, 0, 0])
+                } else {
+                    frame = Data([0x02, 0x01, 0, 0, 0, 0])
+                }
                 connection.send(content: frame, completion: .contentProcessed { _ in })
             }
             timer.resume()
             heartbeatTimer = timer
+            // 兜底：部分仪表不回 version/mac JSON，6 秒后强制请求一次投屏，避免一直干等。
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 6) { [weak self] in
+                guard let self, self.active else { return }
+                if !self.projectionRequested {
+                    self.projectionRequested = true
+                    self.onLog("[凯越] 未收到握手应答，兜底发送导航投屏请求")
+                    self.requestProjection()
+                }
+            }
         }
 
         private func stopHeartbeat() {
